@@ -40,6 +40,7 @@ RUN mkdir -p ${INSTALL_ROOT}/tmp && chmod 1777 ${INSTALL_ROOT}/tmp
 
 COPY tools/container/entrypoint.sh /tmp/entrypoint.sh
 COPY tools/container/entrypoint_functions.sh /tmp/entrypoint_functions.sh
+COPY tools/container/icinga_env.sh /tmp/icinga_env.sh
 
 RUN --mount=type=bind,source=.,target=/icinga2,readonly \
 	cmake -S /icinga2 -B /tmp/icinga2/release \
@@ -78,6 +79,8 @@ RUN mkdir -p \
 		${INSTALL_ROOT}/usr/libexec/icinga2-container-entrypoint.sh && \
 	install -m 0755 /tmp/entrypoint_functions.sh \
 		${INSTALL_ROOT}/usr/libexec/icinga2-container-functions.sh && \
+	install -m 0755 /tmp/icinga_env.sh \
+		${INSTALL_ROOT}/usr/libexec/icinga2-container-env.sh && \
 	chown -R 0:0 \
 		${INSTALL_ROOT}/{run/icinga2,icinga,icinga-init} && \
 	chmod -R g=u \
@@ -89,9 +92,11 @@ RUN mkdir -p \
 #############################
 
 FROM scratch
-LABEL org.opencontainers.image.title="icinga-container"
-LABEL org.opencontainers.image.description="Final image (base runtime + source-built Icinga 2)"
-LABEL org.opencontainers.image.source="https://github.com/PlateIT/icinga2"
+LABEL org.opencontainers.image.title "icinga2"
+LABEL org.opencontainers.image.description "Final image (base runtime + source-built Icinga 2)"
+LABEL org.opencontainers.image.source "https://github.com/PlateIT/icinga2"
+ENV BASH_ENV=/usr/libexec/icinga2-container-env.sh
+ENV ENV=/usr/libexec/icinga2-container-env.sh
 
 ARG INSTALL_ROOT
 
