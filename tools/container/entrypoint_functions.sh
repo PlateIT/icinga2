@@ -91,15 +91,15 @@ EOF
 }
 
 write_icingadb_config() {
-        : "${ICINGADB_REDIS_PORT:=6379}"
-        icinga2_log 3 "Writing Icinga2 Redis configuration..."
-        icinga2 feature enable icingadb
-        cat > "/icinga/etc/features-available/icingadb.conf" <<EOF
+    : "${ICINGADB_REDIS_PORT:=6379}"
+    icinga2_log 3 "Writing Icinga2 Redis configuration..."
+    cat > "/icinga/etc/features-available/icingadb.conf" <<EOF
 object IcingaDB "icingadb" {
     host = "${ICINGADB_REDIS_HOST}"
     port = ${ICINGADB_REDIS_PORT}
 }
 EOF
+    icinga2 feature enable icingadb
 }
 
 write_influxdb_config() {
@@ -113,7 +113,6 @@ write_influxdb_config() {
     : "${ICINGA2_INFLUXDB_DATABASE:=icinga2}"
     : "${ICINGA2_INFLUXDB_PASSWORD:?ICINGA2_INFLUXDB_PASSWORD is required when ICINGA2_INFLUXDB_HOST is set}"
     icinga2_log 3 "Writing Icinga2 InfluxDB configuration..."
-    icinga2 feature enable influxdb2
     cat > "/icinga/etc/features-available/influxdb2.conf" <<EOF
 object Influxdb2Writer "influxdb2" {
     host = "${ICINGA2_INFLUXDB_HOST}"
@@ -141,6 +140,7 @@ object Influxdb2Writer "influxdb2" {
     }
 }
 EOF
+    icinga2 feature enable influxdb2
 
     influxdb_url="http://${ICINGA2_INFLUXDB_HOST}:${ICINGA2_INFLUXDB_PORT}"
 
