@@ -28,7 +28,7 @@ source /usr/libexec/icinga2-container-functions.sh
 
 icinga2_log 3 "Icinga 2 Docker entrypoint script started."
 
-if [ ! -d "/icinga/etc" ]; then
+if [ ! -f "/icinga/setup.done" ]; then
     cp -a /icinga-init/. /icinga/
     if [ -n "${ICINGA_PARENT_HOST:-}" ]; then
         satellite_setup
@@ -37,6 +37,7 @@ if [ ! -d "/icinga/etc" ]; then
         icinga2 node setup --master --accept-config --accept-commands --disable-confd
     fi
     icinga2 feature disable mainlog notification
+    touch /icinga/setup.done
 fi
 
 if [ -n "${ICINGA2_API_USER:-}" ]; then
@@ -53,4 +54,4 @@ fi
 
 
 icinga2_log 3 "Starting Icinga2 daemon..."
-exec "icinga2 daemon" "--log-level" "$ICINGA_LOG_LEVEL"
+exec icinga2 daemon --log-level "$ICINGA_LOG_LEVEL"
