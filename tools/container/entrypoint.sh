@@ -29,7 +29,7 @@ source /usr/libexec/icinga2-container-functions.sh
 icinga2_log 3 "Icinga 2 Docker entrypoint script started."
 
 if [ ! -f "/icinga/setup.done" ]; then
-    cp -a /icinga-init/. /icinga/
+    cp -a --no-preserve=ownership,timestamps /icinga-init/. /icinga/
     if [ -n "${ICINGA_PARENT_HOST:-}" ]; then
         satellite_setup
     else
