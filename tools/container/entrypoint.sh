@@ -1,26 +1,26 @@
 #!/bin/bash
 set -eo pipefail
 
-: "${ICINGA_LOG_LEVEL:=information}"
+: "${ICINGA2_LOG_LEVEL:=information}"
 
-case "$ICINGA_LOG_LEVEL" in
+case "$ICINGA2_LOG_LEVEL" in
     debug)
-        ICINGA_LOG_LEVEL_WEIGHT=1
+        ICINGA2_LOG_LEVEL_WEIGHT=1
         ;;
     notice)
-        ICINGA_LOG_LEVEL_WEIGHT=2
+        ICINGA2_LOG_LEVEL_WEIGHT=2
         ;;
     information)
-        ICINGA_LOG_LEVEL_WEIGHT=3
+        ICINGA2_LOG_LEVEL_WEIGHT=3
         ;;
     warning)
-        ICINGA_LOG_LEVEL_WEIGHT=4
+        ICINGA2_LOG_LEVEL_WEIGHT=4
         ;;
     critical)
-        ICINGA_LOG_LEVEL_WEIGHT=5
+        ICINGA2_LOG_LEVEL_WEIGHT=5
         ;;
     *)
-        ICINGA_LOG_LEVEL_WEIGHT=3
+        ICINGA2_LOG_LEVEL_WEIGHT=3
         ;;
 esac
 
@@ -30,25 +30,25 @@ icinga2_log 3 "Icinga 2 Docker entrypoint script started."
 
 if [ ! -f "/icinga/setup.done" ]; then
     cp -r /icinga-init/. /icinga/
-    if [ -n "${ICINGA_PARENT_HOST:-}" ]; then
+    if [ -n "${ICINGA2_PARENT_HOST:-}" ]; then
         satellite_setup
     else
         icinga2_log 3 "Setting up Icinga2 as master node."
         icinga2 node setup \
             --master \
-            --cn "${ICINGA_HOST:=$(hostname -f)}" \
-            --zone "${ICINGA_ZONE:=master}" \
-            --listen "${ICINGA_IP:=0.0.0.0},${ICINGA_PORT:=5665}" \
+            --cn "${ICINGA2_HOST:=$(hostname -f)}" \
+            --zone "${ICINGA2_ZONE:=master}" \
+            --listen "${ICINGA2_IP:=0.0.0.0},${ICINGA2_PORT:=5665}" \
             --accept-config \
             --accept-commands \
             --disable-confd \
-            --log-level "${ICINGA_LOG_LEVEL}"
+            --log-level "${ICINGA2_LOG_LEVEL}"
     fi
-    
+
     icinga2 feature disable \
         mainlog \
         notification \
-        --log-level "${ICINGA_LOG_LEVEL}"
+        --log-level "${ICINGA2_LOG_LEVEL}"
 
     touch /icinga/setup.done
 fi
@@ -67,4 +67,4 @@ fi
 
 
 icinga2_log 3 "Starting Icinga2 daemon..."
-exec icinga2 daemon --log-level "$ICINGA_LOG_LEVEL"
+exec icinga2 daemon --log-level "$ICINGA2_LOG_LEVEL"
