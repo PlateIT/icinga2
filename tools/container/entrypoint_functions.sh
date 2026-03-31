@@ -20,12 +20,17 @@ satellite_setup() {
 
     : "${ICINGA2_API_USER:?ICINGA2_API_USER is required when ICINGA_PARENT_HOST is set}"
     : "${ICINGA2_API_PASSWORD:?ICINGA2_API_PASSWORD is required when ICINGA_PARENT_HOST is set}"
+    : "${ICINGA_PARENT_IP:${ICINGA_PARENT_HOST}}"
     : "${ICINGA_PARENT_ZONE:=master}"
     : "${ICINGA_PARENT_PORT:=5665}"
+    : "${ICINGA_HOST:=$(hostname -f)}"
+    : "${ICINGA_IP:=0.0.0.0}"
+    : "${ICINGA_PORT:=5665}"
+    : "${ICINGA_ZONE:=satellite}"
 
     common_name="$(hostname -f 2>/dev/null || hostname)"
 
-    icinga2_log 3 "Generating PKI ticket from ${ICINGA_PARENT_HOST}:${ICINGA_PARENT_PORT} for ${common_name}."
+    icinga2_log 3 "Generating PKI ticket from ${ICINGA_PARENT_IP}:${ICINGA_PARENT_PORT} for ${common_name}."
     response=$(curl -k -sS --fail \
         -u "${ICINGA2_API_USER}:${ICINGA2_API_PASSWORD}" \
         -H 'Accept: application/json' \
@@ -40,11 +45,26 @@ satellite_setup() {
     fi
 
     icinga2_log 3 "Setting up Icinga2 as satellite/agent with parent ${ICINGA_PARENT_HOST}."
+    
+    icinga2 pki save-cert \
+        --host "${ICINGA_PARENT_IP}" \
+        --port "${ICINGA_PARENT_PORT}" \
+        --trustedcert /icinga/ca.cert \
+        --log-level "${ICINGA_LOG_LEVEL}"
+
     icinga2 node setup \
-        --parent_host "$ICINGA_PARENT_HOST" \
-        --parent_zone "$ICINGA_PARENT_ZONE" \
+        --cn "${ICINGA_HOST}" \
+        --zone "${ICINGA_ZONE}" \
+        --listen "${ICINGA_IP},${ICINGA_PORT}" \
+        --endpoint "${ICINGA_PARENT_HOST},${ICINGA_PARENT_IP},${ICINGA_PARENT_PORT}" \
+        --parent_host "${ICINGA_PARENT_IP},${ICINGA_PARENT_PORT}" \
+        --parent_zone "${ICINGA_PARENT_ZONE}" \
         --ticket "$parent_ticket" \
-        --accept-config --accept-commands
+        --trustedcert /icinga/ca.cert \
+        --accept-config \
+        --accept-commands \
+        --disable-confd \
+        --log-level "${ICINGA_LOG_LEVEL}"
 }
 
 create_influxdb_database() {
@@ -99,7 +119,8 @@ object IcingaDB "icingadb" {
     port = ${ICINGADB_REDIS_PORT}
 }
 EOF
-    icinga2 feature enable icingadb
+    icinga2 feature enable icingadb \
+        --log-level "${ICINGA_LOG_LEVEL}"
 }
 
 write_influxdb_config() {
@@ -140,7 +161,8 @@ object Influxdb2Writer "influxdb2" {
     }
 }
 EOF
-    icinga2 feature enable influxdb2
+    icinga2 feature enable influxdb2 \
+        --log-level "${ICINGA_LOG_LEVEL}"
 
     influxdb_url="http://${ICINGA2_INFLUXDB_HOST}:${ICINGA2_INFLUXDB_PORT}"
 

@@ -34,9 +34,22 @@ if [ ! -f "/icinga/setup.done" ]; then
         satellite_setup
     else
         icinga2_log 3 "Setting up Icinga2 as master node."
-        icinga2 node setup --master --accept-config --accept-commands --disable-confd
+        icinga2 node setup \
+            --master \
+            --cn "${ICINGA_HOST:=$(hostname -f)}" \
+            --zone "${ICINGA_ZONE:=master}" \
+            --listen "${ICINGA_IP:=0.0.0.0},${ICINGA_PORT:=5665}" \
+            --accept-config \
+            --accept-commands \
+            --disable-confd \
+            --log-level "${ICINGA_LOG_LEVEL}"
     fi
-    icinga2 feature disable mainlog notification
+    
+    icinga2 feature disable \
+        mainlog \
+        notification \
+        --log-level "${ICINGA_LOG_LEVEL}"
+
     touch /icinga/setup.done
 fi
 
