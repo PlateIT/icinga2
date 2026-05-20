@@ -20,7 +20,7 @@ satellite_setup() {
 
     : "${ICINGA2_API_USER:?ICINGA2_API_USER is required when ICINGA2_PARENT_HOST is set}"
     : "${ICINGA2_API_PASSWORD:?ICINGA2_API_PASSWORD is required when ICINGA2_PARENT_HOST is set}"
-    : "${ICINGA2_PARENT_IP:${ICINGA2_PARENT_HOST}}"
+    : "${ICINGA2_PARENT_IP:=${ICINGA2_PARENT_HOST}}"
     : "${ICINGA2_PARENT_ZONE:=master}"
     : "${ICINGA2_PARENT_PORT:=5665}"
     : "${ICINGA2_HOST:=$(hostname -f)}"
@@ -34,7 +34,7 @@ satellite_setup() {
     response=$(curl -k -sS --fail \
         -u "${ICINGA2_API_USER}:${ICINGA2_API_PASSWORD}" \
         -H 'Accept: application/json' \
-        -X POST "https://${ICINGA2_PARENT_HOST}:${ICINGA2_PARENT_PORT}/v1/actions/generate-ticket" \
+        -X POST "https://${ICINGA2_PARENT_IP}:${ICINGA2_PARENT_PORT}/v1/actions/generate-ticket" \
         -d "{\"cn\":\"${common_name}\"}")
 
     parent_ticket=$(printf "%s" "$response" | sed -n 's/.*"ticket"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
