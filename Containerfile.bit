@@ -1,0 +1,96 @@
+###################################################################################
+# BIT Containerfile for Icinga 2
+###################################################################################
+ARG INSTALL_ROOT=/tmp/rootfs
+ARG ROCKY_TAG=10
+
+#############################
+# Base image build
+#############################
+FROM bit-base-images-docker-hosted.nexus.bit.admin.ch/bit/ca-bundle:latest AS certs
+FROM docker-hub.nexus.bit.admin.ch/rockylinux/rockylinux:${ROCKY_TAG} AS base
+
+ARG ROCKY_TAG
+ARG INSTALL_ROOT
+ARG BUILD_JOBS=4
+
+COPY --from=certs /certs/ /usr/share/pki/ca-trust-source/anchors/
+RUN set -eux && update-ca-trust
+
+RUN mkdir -p ${INSTALL_ROOT}
+
+RUN dnf install -y epel-release && \
+	dnf config-manager --set-enabled crb && \
+	dnf install -y bison cmake gcc-c++ flex ninja-build redhat-rpm-config \
+		{boost,bzip2,libedit,mariadb,ncurses,openssl,postgresql,systemd,xz,libzstd,protobuf-lite}-devel && \
+	dnf clean all
+
+RUN dnf install --installroot ${INSTALL_ROOT} \
+		--releasever=${ROCKY_TAG} \
+		--setopt install_weak_deps=false --nodocs -y \
+		hostname bash-completion nagios-plugins-all openssl-libs boost curl protobuf-lite && \
+	dnf --installroot ${INSTALL_ROOT} clean all && \
+	rm -rf ${INSTALL_ROOT}/var/cache/*
+
+RUN --mount=type=bind,source=.,target=/icinga2,readonly \
+	cmake -G Ninja -S /icinga2 -B /tmp/icinga2/release \
+		-DCMAKE_BUILD_TYPE=RelWithDebInfo \
+		-DBUILD_TESTING=OFF \
+		-DCMAKE_INSTALL_PREFIX=/usr \
+		-DCMAKE_INSTALL_SYSCONFDIR=/etc \
+		-DCMAKE_INSTALL_LOCALSTATEDIR=/var \
+		-DICINGA2_CONFIGDIR=/icinga/etc \
+		-DICINGA2_CACHEDIR=/icinga/cache \
+		-DICINGA2_DATADIR=/icinga/lib \
+		-DICINGA2_LOGDIR=/icinga/log \
+		-DICINGA2_SPOOLDIR=/icinga/spool \
+		-DICINGA2_INITRUNDIR=/run/icinga2 \
+		-DICINGA2_PLUGINDIR=/usr/lib64/nagios/plugins \
+		-DICINGA2_USER=icinga \
+		-DICINGA2_GROUP=root \
+		-DICINGA2_COMMAND_GROUP=root \
+		-DICINGA2_WITH_MYSQL=OFF \
+		-DICINGA2_WITH_PGSQL=OFF \
+		-DICINGA2_WITH_CHECKER=ON \
+		-DICINGA2_WITH_COMPAT=OFF \
+		-DICINGA2_WITH_LIVESTATUS=OFF \
+		-DICINGA2_WITH_NOTIFICATION=OFF \
+		-DICINGA2_WITH_PERFDATA=ON \
+    -DICINGA2_WITH_ICINGADB=ON \
+		-DICINGA2_UNITY_BUILD=ON \
+		-DUSE_SYSTEMD=OFF \
+		-DICINGA2_GIT_VERSION_INFO=OFF && \
+	cmake --build /tmp/icinga2/release --parallel "${BUILD_JOBS}" && \
+	DESTDIR=${INSTALL_ROOT} cmake --install /tmp/icinga2/release
+
+COPY bit/entrypoint.sh bit/entrypoint_functions.sh bit/icinga_env.sh /tmp/
+
+RUN mkdir -p \
+		${INSTALL_ROOT}/{run/icinga2,usr/libexec} && \
+	cp -a ${INSTALL_ROOT}/icinga ${INSTALL_ROOT}/icinga-init && \
+  install -m 0755 /tmp/entrypoint.sh ${INSTALL_ROOT}/usr/libexec/icinga2-container-entrypoint.sh && \
+  install -m 0644 /tmp/entrypoint_functions.sh ${INSTALL_ROOT}/usr/libexec/icinga2-container-functions.sh && \
+  install -m 0644 /tmp/icinga_env.sh ${INSTALL_ROOT}/usr/libexec/icinga2-container-env.sh && \
+  chown -R 0:0 ${INSTALL_ROOT}/icinga ${INSTALL_ROOT}/icinga-init ${INSTALL_ROOT}/run/icinga2 && \
+  chmod -R g=u ${INSTALL_ROOT}/icinga ${INSTALL_ROOT}/icinga-init ${INSTALL_ROOT}/run/icinga2&& \
+	rm -rf ${INSTALL_ROOT}/usr/share/{doc,man}
+  
+#############################
+# Final image
+#############################
+
+FROM scratch
+ARG INSTALL_ROOT
+
+ENV BASH_ENV=/usr/libexec/icinga2-container-env.sh
+ENV ENV=/usr/libexec/icinga2-container-env.sh
+
+COPY --from=base ${INSTALL_ROOT}/ /
+
+VOLUME ["/icinga"]
+ENTRYPOINT ["/usr/libexec/icinga2-container-entrypoint.sh"]
+
+LABEL bit.image.authors="IDTR-ICD@bit.admin.ch" \
+      bit.image.vendor="BIT PS-PSC-AUI" \
+      bit.image.title="BIT icinga2 image" \
+      bit.image.description="Icinga 2 image built from source."
