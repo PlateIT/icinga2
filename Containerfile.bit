@@ -63,7 +63,7 @@ RUN --mount=type=bind,source=.,target=/icinga2,readonly \
 	cmake --build /tmp/icinga2/release --parallel "${BUILD_JOBS}" && \
 	DESTDIR=${INSTALL_ROOT} cmake --install /tmp/icinga2/release
 
-COPY bit/entrypoint.sh bit/entrypoint_functions.sh bit/icinga_env.sh /tmp/
+COPY bit/entrypoint.sh bit/entrypoint_functions.sh bit/icinga_env.sh bit/check_dirx_api.sh /tmp/
 
 RUN mkdir -p \
 		${INSTALL_ROOT}/{run/icinga2,usr/libexec} && \
@@ -71,6 +71,7 @@ RUN mkdir -p \
   install -m 0755 /tmp/entrypoint.sh ${INSTALL_ROOT}/usr/libexec/icinga2-container-entrypoint.sh && \
   install -m 0644 /tmp/entrypoint_functions.sh ${INSTALL_ROOT}/usr/libexec/icinga2-container-functions.sh && \
   install -m 0644 /tmp/icinga_env.sh ${INSTALL_ROOT}/usr/libexec/icinga2-container-env.sh && \
+  install -m 0755 /tmp/check_dirx_api.sh ${INSTALL_ROOT}/usr/lib64/nagios/plugins/check_dirx_api && \
   chown -R 0:0 ${INSTALL_ROOT}/icinga ${INSTALL_ROOT}/icinga-init ${INSTALL_ROOT}/run/icinga2 && \
   chmod -R g=u ${INSTALL_ROOT}/icinga ${INSTALL_ROOT}/icinga-init ${INSTALL_ROOT}/run/icinga2&& \
 	rm -rf ${INSTALL_ROOT}/usr/share/{doc,man}
