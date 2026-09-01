@@ -64,8 +64,6 @@ bootstrap_from_parent() {
     parent_port="$3"
     common_name="$4"
 
-    : "${ICINGA2_CA_CERT_FILE:?ICINGA2_CA_CERT_FILE is required for parent certificate verification}"
-
     icinga2_log 3 "Saving the certificate from parent ${parent_name} at ${parent_address}:${parent_port}."
     if ! icinga2 pki save-cert \
         --host "${parent_address}" \
@@ -76,13 +74,22 @@ bootstrap_from_parent() {
         return 1
     fi
 
-    if ! openssl verify -CAfile "$ICINGA2_CA_CERT_FILE" /icinga/ca.cert >/dev/null; then
-        icinga2_log 4 "Parent ${parent_name} presented a certificate outside the configured Icinga CA."
-        return 1
+    if [ -n "${ICINGA2_CA_CERT_FILE:-}" ]; then
+        bootstrap_trust_file="${ICINGA2_CA_TRUST_FILE:-$ICINGA2_CA_CERT_FILE}"
+        if ! openssl verify -CAfile "$bootstrap_trust_file" /icinga/ca.cert >/dev/null; then
+            icinga2_log 4 "Parent ${parent_name} presented a certificate outside the configured external Icinga CA."
+            return 1
+        fi
+    else
+        # Internal-CA bootstrap deliberately uses the certificate obtained from
+        # the configured parent. NetworkPolicy, stable StatefulSet DNS and API
+        # credentials form the bootstrap boundary; node setup subsequently
+        # installs the Icinga CA delivered with the signed certificate.
+        bootstrap_trust_file=/icinga/ca.cert
     fi
 
     icinga2_log 3 "Requesting a PKI ticket from parent ${parent_name} at ${parent_address}:${parent_port}."
-    if ! response=$(curl --cacert "$ICINGA2_CA_CERT_FILE" \
+    if ! response=$(curl --cacert "$bootstrap_trust_file" \
         --resolve "${parent_name}:${parent_port}:${parent_address}" \
         -sS --fail \
         -u "${ICINGA2_API_USER}:${ICINGA2_API_PASSWORD}" \
@@ -166,24 +173,65 @@ satellite_setup() {
         --disable-confd \
         --log-level "${ICINGA2_LOG_LEVEL}"
 
-    # A satellite master is itself bootstrapped by its parent, but must also
-    # be able to issue tickets for its own direct children. Supplying the CA
-    # key explicitly promotes only that control-plane role to a signing node.
-    if [ -n "${ICINGA2_CA_KEY_FILE:-}" ]; then
-        install_shared_ca
-    fi
 }
 
-install_shared_ca() {
-    : "${ICINGA2_CA_CERT_FILE:?ICINGA2_CA_CERT_FILE is required for a master HA zone}"
-    : "${ICINGA2_CA_KEY_FILE:?ICINGA2_CA_KEY_FILE is required for a master HA zone}"
-    if [ ! -s "$ICINGA2_CA_CERT_FILE" ] || [ ! -s "$ICINGA2_CA_KEY_FILE" ]; then
-        icinga2_log 5 "The configured shared CA certificate or key is empty."
+ca_fingerprint() {
+    openssl x509 -in "$1" -noout -fingerprint -sha256 \
+        | sed 's/^.*=//' | tr -d ':' | tr '[:upper:]' '[:lower:]'
+}
+
+install_managed_intermediate() {
+    local cert_dir ca_dir archive_dir fingerprint current_fingerprint data_root
+
+    : "${ICINGA2_CA_CERT_FILE:?ICINGA2_CA_CERT_FILE is required in intermediate CA mode}"
+    : "${ICINGA2_CA_KEY_FILE:?ICINGA2_CA_KEY_FILE is required in intermediate CA mode}"
+    : "${ICINGA2_CA_TRUST_FILE:?ICINGA2_CA_TRUST_FILE is required in intermediate CA mode}"
+    if [ ! -s "$ICINGA2_CA_CERT_FILE" ] || [ ! -s "$ICINGA2_CA_KEY_FILE" ] || [ ! -s "$ICINGA2_CA_TRUST_FILE" ]; then
+        icinga2_log 5 "The intermediate certificate, key or corporate trust bundle is empty."
         return 1
     fi
-    install -d -m 0700 /icinga/lib/icinga2/ca
-    install -m 0644 "$ICINGA2_CA_CERT_FILE" /icinga/lib/icinga2/ca/ca.crt
-    install -m 0600 "$ICINGA2_CA_KEY_FILE" /icinga/lib/icinga2/ca/ca.key
+
+    if ! openssl verify -CAfile "$ICINGA2_CA_TRUST_FILE" "$ICINGA2_CA_CERT_FILE" >/dev/null; then
+        icinga2_log 5 "The Icinga intermediate does not validate against the corporate trust bundle."
+        return 1
+    fi
+    if [ "$(openssl x509 -in "$ICINGA2_CA_CERT_FILE" -pubkey -noout | openssl pkey -pubin -outform DER | openssl sha256)" != \
+         "$(openssl pkey -in "$ICINGA2_CA_KEY_FILE" -pubout -outform DER | openssl sha256)" ]; then
+        icinga2_log 5 "The Icinga intermediate certificate and private key do not match."
+        return 1
+    fi
+    if [ "$(openssl x509 -in "$ICINGA2_CA_CERT_FILE" -noout -text | grep -c 'CA:TRUE')" -lt 1 ]; then
+        icinga2_log 5 "The supplied Icinga intermediate is not a CA certificate."
+        return 1
+    fi
+
+    data_root="${ICINGA2_DATA_ROOT:-/icinga}"
+    ca_dir="$data_root/lib/icinga2/ca"
+    cert_dir="$data_root/lib/icinga2/certs"
+    archive_dir="$ca_dir/trusted-roots"
+    install -d -m 0700 "$ca_dir" "$archive_dir"
+    install -d -m 0755 "$cert_dir"
+
+    fingerprint=$(ca_fingerprint "$ICINGA2_CA_CERT_FILE")
+    if [ -s "$ca_dir/ca.crt" ]; then
+        current_fingerprint=$(ca_fingerprint "$ca_dir/ca.crt")
+        if [ "$current_fingerprint" != "$fingerprint" ]; then
+            install -m 0644 "$ca_dir/ca.crt" "$archive_dir/$current_fingerprint.crt"
+            icinga2_log 3 "Retained the previous Icinga intermediate in the persistent trust archive."
+        fi
+    fi
+
+    install -m 0644 "$ICINGA2_CA_CERT_FILE" "$ca_dir/ca.crt"
+    install -m 0600 "$ICINGA2_CA_KEY_FILE" "$ca_dir/ca.key"
+    touch "$ca_dir/corporate-intermediate"
+    cp "$ICINGA2_CA_TRUST_FILE" "$cert_dir/ca.crt.tmp"
+    cat "$ICINGA2_CA_CERT_FILE" >> "$cert_dir/ca.crt.tmp"
+    for old_cert in "$archive_dir"/*.crt; do
+        [ -e "$old_cert" ] || continue
+        cat "$old_cert" >> "$cert_dir/ca.crt.tmp"
+    done
+    chmod 0644 "$cert_dir/ca.crt.tmp"
+    mv "$cert_dir/ca.crt.tmp" "$cert_dir/ca.crt"
 }
 
 write_ha_zone_config() {

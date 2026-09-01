@@ -54,16 +54,6 @@ grep -Fq 'icinga2 pki save-cert --host 192.0.2.10 --port 5666' "$TEST_LOG"
 grep -Fq -- '--endpoint parent-1,192.0.2.10,5666' "$TEST_LOG"
 grep -Fq -- '--ticket ticket-from-parent-1' "$TEST_LOG"
 
-printf '%s\n' certificate > "$TEST_CA_DIR/ca.crt"
-printf '%s\n' private-key > "$TEST_CA_DIR/ca.key"
-ICINGA2_CA_CERT_FILE="$TEST_CA_DIR/ca.crt"
-ICINGA2_CA_KEY_FILE="$TEST_CA_DIR/ca.key"
-install() {
-    printf 'install %s\n' "$*" >> "$TEST_LOG"
-}
-satellite_setup
-grep -Fq "install -m 0600 $TEST_CA_DIR/ca.key /icinga/lib/icinga2/ca/ca.key" "$TEST_LOG"
-unset ICINGA2_CA_KEY_FILE
 ICINGA2_CA_CERT_FILE=/test/icinga-ca.crt
 
 if assert_icinga_name 'broken"name' TEST_NAME; then
@@ -113,6 +103,41 @@ grep -Fq 'object Endpoint "parent-1"' "$TEST_CONFIG_DIR/zones.conf"
 grep -Fq 'object Zone "global-templates"' "$TEST_CONFIG_DIR/zones.conf"
 grep -Fq 'object Zone "director-global"' "$TEST_CONFIG_DIR/zones.conf"
 test "$(grep -Fc 'global = true' "$TEST_CONFIG_DIR/zones.conf")" -eq 2
+
+TEST_PKI_DIR=$(mktemp -d)
+trap 'rm -f "$TEST_LOG"; rm -rf "$TEST_CONFIG_DIR" "$TEST_CA_DIR" "$TEST_PKI_DIR"' EXIT
+unset -f openssl
+openssl genrsa -out "$TEST_PKI_DIR/root.key" 2048 >/dev/null 2>&1
+openssl req -x509 -new -key "$TEST_PKI_DIR/root.key" -subj //CN=Corporate-Test-Root \
+    -days 30 -out "$TEST_PKI_DIR/root.crt" >/dev/null 2>&1
+openssl genrsa -out "$TEST_PKI_DIR/intermediate.key" 2048 >/dev/null 2>&1
+openssl req -new -key "$TEST_PKI_DIR/intermediate.key" -subj //CN=Icinga-Test-Intermediate \
+    -out "$TEST_PKI_DIR/intermediate.csr" >/dev/null 2>&1
+printf '%s\n' 'basicConstraints=critical,CA:TRUE,pathlen:0' 'keyUsage=critical,keyCertSign,cRLSign' > "$TEST_PKI_DIR/extensions"
+openssl x509 -req -in "$TEST_PKI_DIR/intermediate.csr" -CA "$TEST_PKI_DIR/root.crt" \
+    -CAkey "$TEST_PKI_DIR/root.key" -CAcreateserial -days 20 -extfile "$TEST_PKI_DIR/extensions" \
+    -out "$TEST_PKI_DIR/intermediate.crt" >/dev/null 2>&1
+ICINGA2_DATA_ROOT="$TEST_PKI_DIR/data"
+ICINGA2_CA_CERT_FILE="$TEST_PKI_DIR/intermediate.crt"
+ICINGA2_CA_KEY_FILE="$TEST_PKI_DIR/intermediate.key"
+ICINGA2_CA_TRUST_FILE="$TEST_PKI_DIR/root.crt"
+install() {
+    if [ "$1" = "-d" ]; then
+        shift
+        [ "$1" = "-m" ] && shift 2
+        mkdir -p "$@"
+    elif [ "$1" = "-m" ]; then
+        cp "$3" "$4"
+    else
+        command install "$@"
+    fi
+}
+install_managed_intermediate
+unset -f install
+test -s "$ICINGA2_DATA_ROOT/lib/icinga2/ca/ca.crt"
+test -s "$ICINGA2_DATA_ROOT/lib/icinga2/ca/ca.key"
+test -e "$ICINGA2_DATA_ROOT/lib/icinga2/ca/corporate-intermediate"
+openssl verify -CAfile "$ICINGA2_DATA_ROOT/lib/icinga2/certs/ca.crt" "$TEST_PKI_DIR/intermediate.crt" >/dev/null
 
 ICINGA2_API_USER=web-api
 ICINGA2_API_PASSWORD='quote"and\backslash'

@@ -1079,6 +1079,23 @@ bool VerifyCertificate(const std::shared_ptr<X509> &caCertificate, const std::sh
 	return VerifyCertificate(caCertificate.get(), certificate.get(), crlFile);
 }
 
+bool VerifyCertificate(const String& caFile, const std::shared_ptr<X509>& certificate, const String& crlFile)
+{
+	std::unique_ptr<X509_STORE, decltype(&X509_STORE_free)> store{X509_STORE_new(), &X509_STORE_free};
+
+	if (!store || X509_STORE_load_locations(store.get(), caFile.CStr(), nullptr) != 1)
+		return false;
+
+	if (!crlFile.IsEmpty())
+		AddCRLToSSLContext(store.get(), crlFile);
+
+	std::unique_ptr<X509_STORE_CTX, decltype(&X509_STORE_CTX_free)> context{X509_STORE_CTX_new(), &X509_STORE_CTX_free};
+	if (!context || X509_STORE_CTX_init(context.get(), store.get(), certificate.get(), nullptr) != 1)
+		return false;
+
+	return X509_verify_cert(context.get()) == 1;
+}
+
 bool VerifyCertificate(X509* caCertificate, X509* certificate, const String& crlFile)
 {
 #if OPENSSL_VERSION_NUMBER < 0x10100000L

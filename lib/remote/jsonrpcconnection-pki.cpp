@@ -52,7 +52,9 @@ Value RequestCertificateHandler(const MessageOrigin::Ptr& origin, const Dictiona
 	}
 
 	ApiListener::Ptr listener = ApiListener::GetInstance();
-	std::shared_ptr<X509> cacert = GetX509Certificate(listener->GetDefaultCaPath());
+	std::shared_ptr<X509> cacert = GetX509Certificate(GetIcingaCADir() + "/ca.crt");
+	std::ifstream caStream(listener->GetDefaultCaPath().CStr());
+	String caBundle((std::istreambuf_iterator<char>(caStream)), std::istreambuf_iterator<char>());
 
 	String cn = GetCertificateCN(cert);
 
@@ -63,7 +65,7 @@ Value RequestCertificateHandler(const MessageOrigin::Ptr& origin, const Dictiona
 		logmsg << "Received certificate request for CN '" << cn << "'";
 
 		try {
-			signedByCA = VerifyCertificate(cacert, cert, listener->GetCrlPath());
+			signedByCA = VerifyCertificate(listener->GetDefaultCaPath(), cert, listener->GetCrlPath());
 			if (!signedByCA) {
 				logmsg << " not";
 			}
@@ -154,7 +156,7 @@ Value RequestCertificateHandler(const MessageOrigin::Ptr& origin, const Dictiona
 	String requestDir = ApiListener::GetCertificateRequestsDir();
 	String requestPath = requestDir + "/" + certFingerprint + ".json";
 
-	result->Set("ca", CertificateToString(cacert));
+	result->Set("ca", caBundle);
 
 	JsonRpcConnection::Ptr client = origin->FromClient;
 
