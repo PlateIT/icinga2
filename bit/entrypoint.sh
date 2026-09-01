@@ -18,14 +18,17 @@ icinga2_log 3 "Icinga 2 Docker entrypoint script started."
 
 if [ ! -f "/icinga/setup.done" ]; then
     cp -r /icinga-init/. /icinga/
-    if [ -n "${ICINGA2_PARENT_HOST:-}" ]; then
+    if [ -n "${ICINGA2_PARENT_ENDPOINT_0_NAME:-}" ]; then
         satellite_setup
     else
+        : "${ICINGA2_HOST:?ICINGA2_HOST is required}"
+        : "${ICINGA2_ZONE:?ICINGA2_ZONE is required}"
+        install_shared_ca
         icinga2_log 3 "Setting up Icinga2 as master node."
         icinga2 node setup \
             --master \
-            --cn "${ICINGA2_HOST:=$(hostname -f)}" \
-            --zone "${ICINGA2_ZONE:=master}" \
+            --cn "${ICINGA2_HOST}" \
+            --zone "${ICINGA2_ZONE}" \
             --listen "${ICINGA2_IP:=0.0.0.0},${ICINGA2_PORT:=5665}" \
             --accept-config \
             --accept-commands \
@@ -41,16 +44,16 @@ if [ ! -f "/icinga/setup.done" ]; then
     touch /icinga/setup.done
 fi
 
+if [ "${ICINGA2_HA_ENABLED:-false}" = "true" ]; then
+    write_ha_zone_config
+fi
+
 if [ -n "${ICINGA2_API_USER:-}" ]; then
     write_api_user_config
 fi
 
 if [ -n "${ICINGADB_REDIS_HOST:-}" ]; then
     write_icingadb_config
-fi
-
-if [ -n "${ICINGA2_INFLUXDB_HOST:-}" ]; then
-    write_influxdb_config
 fi
 
 icinga2_log 3 "Starting Icinga2 daemon..."
