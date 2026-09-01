@@ -231,6 +231,12 @@ EOF
 object Zone "${ICINGA2_ZONE}" {
     endpoints = [ "${ICINGA2_HA_ENDPOINT_0_NAME}", "${ICINGA2_HA_ENDPOINT_1_NAME}" ]
 }
+object Zone "global-templates" {
+    global = true
+}
+object Zone "director-global" {
+    global = true
+}
 EOF
 
     if [ -n "${ICINGA2_PARENT_ENDPOINT_0_NAME:-}" ]; then

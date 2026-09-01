@@ -110,6 +110,9 @@ fi
 sed -n '/object Endpoint "child-icinga-1"/,/^}/p' "$TEST_CONFIG_DIR/zones.conf" | grep -Fq 'host = "icinga-1.icinga-headless"'
 grep -Fq 'object Endpoint "parent-0"' "$TEST_CONFIG_DIR/zones.conf"
 grep -Fq 'object Endpoint "parent-1"' "$TEST_CONFIG_DIR/zones.conf"
+grep -Fq 'object Zone "global-templates"' "$TEST_CONFIG_DIR/zones.conf"
+grep -Fq 'object Zone "director-global"' "$TEST_CONFIG_DIR/zones.conf"
+test "$(grep -Fc 'global = true' "$TEST_CONFIG_DIR/zones.conf")" -eq 2
 
 ICINGA2_API_USER=web-api
 ICINGA2_API_PASSWORD='quote"and\backslash'
