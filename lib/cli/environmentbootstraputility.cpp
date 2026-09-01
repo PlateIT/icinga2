@@ -132,7 +132,7 @@ String TicketSalt()
 	return salt;
 }
 
-struct Endpoint
+struct BootstrapEndpoint
 {
 	String name;
 	String address;
@@ -150,7 +150,7 @@ void ValidatePort(const String& value, const String& variable)
 	}
 }
 
-String RequestTicket(const Endpoint& parent, const std::shared_ptr<X509>& expectedCertificate,
+String RequestTicket(const BootstrapEndpoint& parent, const std::shared_ptr<X509>& expectedCertificate,
 	const String& commonName)
 {
 	namespace beast = boost::beast;
@@ -276,12 +276,12 @@ void ReconcileIntermediateCa()
 	AtomicFile::Write(certDir + "/ca.crt", 0644, trustBundle);
 }
 
-void ValidateEndpoint(const Endpoint& endpoint);
+void ValidateEndpoint(const BootstrapEndpoint& endpoint);
 
-Endpoint Parent(unsigned int index)
+BootstrapEndpoint Parent(unsigned int index)
 {
 	String suffix = Convert::ToString(index);
-	Endpoint endpoint {
+	BootstrapEndpoint endpoint {
 		RequireEnv("ICINGA2_PARENT_ENDPOINT_" + suffix + "_NAME"),
 		RequireEnv("ICINGA2_PARENT_ENDPOINT_" + suffix + "_ADDRESS"),
 		RequireEnv("ICINGA2_PARENT_ENDPOINT_" + suffix + "_PORT")
@@ -290,7 +290,7 @@ Endpoint Parent(unsigned int index)
 	return endpoint;
 }
 
-void ValidateEndpoint(const Endpoint& endpoint)
+void ValidateEndpoint(const BootstrapEndpoint& endpoint)
 {
 	ValidateName(endpoint.name, "parent endpoint name");
 	ValidateAddress(endpoint.address, "parent endpoint address");
@@ -317,8 +317,8 @@ void ValidateHaTopology(bool rootZone, const String& host, const String& zone)
 		if (parentZone == zone)
 			BOOST_THROW_EXCEPTION(std::invalid_argument(
 				"ICINGA2_PARENT_ZONE must differ from ICINGA2_ZONE"));
-		Endpoint parent0 = Parent(0);
-		Endpoint parent1 = Parent(1);
+		BootstrapEndpoint parent0 = Parent(0);
+		BootstrapEndpoint parent1 = Parent(1);
 		if (parent0.name == parent1.name
 			|| (parent0.address == parent1.address && parent0.port == parent1.port)) {
 			BOOST_THROW_EXCEPTION(std::invalid_argument(
@@ -357,11 +357,11 @@ void WriteHaZones(bool rootZone, const String& host, const String& zone)
 		<< "object Zone \"director-global\" { global = true }\n";
 
 	if (!rootZone) {
-		Endpoint parent0 = Parent(0);
-		Endpoint parent1 = Parent(1);
+		BootstrapEndpoint parent0 = Parent(0);
+		BootstrapEndpoint parent1 = Parent(1);
 		String parentZone = RequireEnv("ICINGA2_PARENT_ZONE");
 		ValidateName(parentZone, "ICINGA2_PARENT_ZONE");
-		for (const Endpoint& endpoint : {parent0, parent1}) {
+		for (const BootstrapEndpoint& endpoint : {parent0, parent1}) {
 			config << "object Endpoint \"" << endpoint.name << "\" {\n"
 				<< "  host = \"" << endpoint.address << "\"\n"
 				<< "  port = " << endpoint.port << "\n}\n";
@@ -405,14 +405,14 @@ void ReconcileRuntimeConfiguration(const String& host, const String& zone, const
 }
 
 int SetupSatellite(const String& host, const String& zone, const String& listen,
-	const String& parentZone, const std::vector<Endpoint>& candidates)
+	const String& parentZone, const std::vector<BootstrapEndpoint>& candidates)
 {
 	String trustedFile = Configuration::DataDir + "/certs/bootstrap-parent.crt";
 	Utility::MkDirP(Configuration::DataDir + "/certs", 0700);
-	Endpoint parent;
+	BootstrapEndpoint parent;
 	String ticket;
 	bool bootstrapped = false;
-	for (const Endpoint& candidate : candidates) {
+	for (const BootstrapEndpoint& candidate : candidates) {
 		try {
 			auto parentCertificate = PkiUtility::FetchCert(candidate.address, candidate.port);
 			if (!parentCertificate)
@@ -501,10 +501,10 @@ bool EnvironmentBootstrapUtility::Run()
 				rc = SetupMaster(host);
 			} else {
 				String parentZone;
-				std::vector<Endpoint> parents;
+				std::vector<BootstrapEndpoint> parents;
 				if (rootZone) {
 					parentZone = zone;
-					Endpoint parent {
+					BootstrapEndpoint parent {
 						RequireEnv("ICINGA2_CA_PRIMARY_NAME"),
 						RequireEnv("ICINGA2_CA_PRIMARY_ADDRESS"),
 						Env("ICINGA2_CA_PRIMARY_PORT", "5665")
