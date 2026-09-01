@@ -39,8 +39,7 @@ if [ "${ICINGA2_ROOT_ZONE:-false}" = "true" ]; then
     esac
 fi
 
-if [ ! -f "/icinga/setup.done" ]; then
-    cp -r /icinga-init/. /icinga/
+if [ ! -f "/icinga/lib/icinga2/setup.done" ]; then
     if [ "${ICINGA2_CA_MODE:-internal}" = "intermediate" ] && [ "${ICINGA2_CA_SIGNER:-false}" = "true" ]; then
         install_managed_intermediate
     fi
@@ -71,7 +70,7 @@ if [ ! -f "/icinga/setup.done" ]; then
         notification \
         --log-level "${ICINGA2_LOG_LEVEL}"
 
-    touch /icinga/setup.done
+    touch /icinga/lib/icinga2/setup.done
 fi
 
 # Parent variables on root ordinal 1 are bootstrap-only. The final zone
@@ -90,14 +89,6 @@ fi
 
 if [ "${ICINGA2_HA_ENABLED:-false}" = "true" ]; then
     write_ha_zone_config
-fi
-
-if [ -n "${ICINGA2_API_USER:-}" ]; then
-    write_api_user_config
-fi
-
-if [ -n "${ICINGADB_REDIS_HOST:-}" ]; then
-    write_icingadb_config
 fi
 
 icinga2_log 3 "Starting Icinga2 daemon..."

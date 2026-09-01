@@ -39,19 +39,6 @@ assert_port() {
     }
 }
 
-icinga_string_literal() {
-    local value="$1"
-    case "$value" in
-        *$'\n'*|*$'\r'*)
-            icinga2_log 5 "$2 must not contain line breaks."
-            return 1
-            ;;
-    esac
-    value="${value//\\/\\\\}"
-    value="${value//\"/\\\"}"
-    printf '%s' "$value"
-}
-
 bootstrap_from_parent() {
     local parent_name
     local parent_address
@@ -313,32 +300,4 @@ object Zone "${ICINGA2_PARENT_ZONE}" {
 }
 EOF
     fi
-}
-
-write_api_user_config() {
-    : "${ICINGA2_API_PASSWORD:?ICINGA2_API_PASSWORD is required when ICINGA2_API_USER is set}"
-    local config_dir="${ICINGA2_CONFIG_DIR:-/icinga/etc}"
-    local escaped_password
-    assert_icinga_name "$ICINGA2_API_USER" ICINGA2_API_USER || return 1
-    escaped_password="$(icinga_string_literal "$ICINGA2_API_PASSWORD" ICINGA2_API_PASSWORD)" || return 1
-    icinga2_log 3 "Writing Icinga2 API user configuration..."
-    mkdir -p "$config_dir/conf.d"
-    cat > "$config_dir/conf.d/api-users.conf" <<EOF
-object ApiUser "${ICINGA2_API_USER}" {
-    password = "${escaped_password}"
-    permissions = [ "*" ]
-}
-EOF
-}
-
-write_icingadb_config() {
-    : "${ICINGADB_REDIS_PORT:=6379}"
-    icinga2_log 3 "Writing Icinga2 Redis configuration..."
-    cat > "/icinga/etc/features-available/icingadb.conf" <<EOF
-object IcingaDB "icingadb" {
-    host = "${ICINGADB_REDIS_HOST}"
-    port = ${ICINGADB_REDIS_PORT}
-}
-EOF
-    icinga2 feature enable icingadb --log-level "${ICINGA2_LOG_LEVEL}"
 }

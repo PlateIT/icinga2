@@ -139,22 +139,4 @@ test -s "$ICINGA2_DATA_ROOT/lib/icinga2/ca/ca.key"
 test -e "$ICINGA2_DATA_ROOT/lib/icinga2/ca/corporate-intermediate"
 openssl verify -CAfile "$ICINGA2_DATA_ROOT/lib/icinga2/certs/ca.crt" "$TEST_PKI_DIR/intermediate.crt" >/dev/null
 
-ICINGA2_API_USER=web-api
-ICINGA2_API_PASSWORD='quote"and\backslash'
-write_api_user_config
-grep -Fq 'object ApiUser "web-api"' "$TEST_CONFIG_DIR/conf.d/api-users.conf"
-grep -Fq 'password = "quote\"and\\backslash"' "$TEST_CONFIG_DIR/conf.d/api-users.conf"
-
-ICINGA2_API_USER='broken"user'
-if write_api_user_config; then
-    echo 'unsafe API user name was accepted' >&2
-    exit 1
-fi
-ICINGA2_API_USER=web-api
-ICINGA2_API_PASSWORD=$'line1\nline2'
-if write_api_user_config; then
-    echo 'multiline API password was accepted' >&2
-    exit 1
-fi
-
 echo 'Entrypoint HA bootstrap tests passed.'
