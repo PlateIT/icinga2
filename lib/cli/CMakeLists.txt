@@ -13,6 +13,7 @@ set(cli_SOURCES
   consolecommand.cpp consolecommand.hpp
   daemoncommand.cpp daemoncommand.hpp
   daemonutility.cpp daemonutility.hpp
+  environmentbootstraputility.cpp environmentbootstraputility.hpp
   editline.hpp
   featuredisablecommand.cpp featuredisablecommand.hpp
   featureenablecommand.cpp featureenablecommand.hpp

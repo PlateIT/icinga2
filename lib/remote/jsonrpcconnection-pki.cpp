@@ -12,6 +12,7 @@
 #include "base/logger.hpp"
 #include "base/exception.hpp"
 #include "base/convert.hpp"
+#include "base/tlsutility.hpp"
 #include <boost/thread/once.hpp>
 #include <boost/regex.hpp>
 #include <fstream>
@@ -86,6 +87,22 @@ Value RequestCertificateHandler(const MessageOrigin::Ptr& origin, const Dictiona
 
 	if (signedByCA) {
 		bool uptodate = IsCertUptodate(cert);
+		String requestorCaFingerprint = params->Get("ca_fingerprint");
+		if (!requestorCaFingerprint.IsEmpty()
+			&& !boost::regex_match(requestorCaFingerprint.GetData(), boost::regex("^[0-9a-f]{64}$"))) {
+			Log(LogWarning, "JsonRpcConnection")
+				<< "CN '" << cn << "' sent an invalid CA trust bundle fingerprint.";
+			result->Set("status_code", 1);
+			result->Set("error", "Invalid CA trust bundle fingerprint.");
+			return result;
+		}
+		if (!requestorCaFingerprint.IsEmpty()
+			&& requestorCaFingerprint != SHA256(caBundle)) {
+			Log(LogInformation, "JsonRpcConnection")
+				<< "The CA trust bundle for CN '" << cn
+				<< "' is outdated. Renewing its certificate and trust bundle.";
+			uptodate = false;
+		}
 
 		if (uptodate) {
 			// Even if the leaf is up-to-date, the root may expire soon.
@@ -270,6 +287,8 @@ delayed_request:
 		{ "cert_request", CertificateToString(cert) },
 		{ "ticket", params->Get("ticket") }
 	});
+	if (params->Contains("ca_fingerprint"))
+		request->Set("ca_fingerprint", params->Get("ca_fingerprint"));
 
 	if (requestorCA) {
 		request->Set("requestor_ca", CertificateToString(requestorCA));
@@ -322,6 +341,12 @@ void JsonRpcConnection::SendCertificateRequest(const JsonRpcConnection::Ptr& acl
 		fp.close();
 
 		params->Set("ticket", ticket);
+		String caPath = ApiListener::GetDefaultCaPath();
+		if (Utility::PathExists(caPath)) {
+			std::ifstream caStream(caPath.CStr());
+			String caBundle((std::istreambuf_iterator<char>(caStream)), std::istreambuf_iterator<char>());
+			params->Set("ca_fingerprint", SHA256(caBundle));
+		}
 	} else {
 		Dictionary::Ptr request = Utility::LoadJsonFile(path);
 

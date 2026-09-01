@@ -3,6 +3,7 @@
 
 #include "cli/daemoncommand.hpp"
 #include "cli/daemonutility.hpp"
+#include "cli/environmentbootstraputility.hpp"
 #include "remote/apilistener.hpp"
 #include "remote/configobjectslock.hpp"
 #include "remote/configobjectutility.hpp"
@@ -189,6 +190,7 @@ void DaemonCommand::InitParameters(boost::program_options::options_description& 
 		("no-config,z", "start without a configuration file")
 		("validate,C", "exit after validating the configuration")
 		("dump-objects", "write icinga2.debug cache file for icinga2 object list")
+		("environment-bootstrap", "initialize and reconcile this node from ICINGA2_* environment variables")
 		("errorlog,e", po::value<std::string>(), "log fatal errors to the specified log file (only works in combination with --daemonize or --close-stdio)")
 #ifndef _WIN32
 		("daemonize,d", "detach from the controlling terminal")
@@ -639,6 +641,9 @@ int DaemonCommand::Run(const po::variables_map& vm, [[maybe_unused]] const std::
 		<< "; debug"
 #endif /* I2_DEBUG */
 		<< ")";
+
+	if (vm.count("environment-bootstrap") && !EnvironmentBootstrapUtility::Run())
+		return EXIT_FAILURE;
 
 	std::vector<std::string> configs;
 	if (vm.count("config") > 0)
