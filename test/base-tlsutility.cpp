@@ -218,6 +218,8 @@ BOOST_FIXTURE_TEST_CASE(create_verify_leaf_certs, CertificateFixture,
 	}
 	BOOST_CHECK(IsCertUptodate(cert)); // Is leaf up-to-date after its creation?
 	BOOST_CHECK(VerifyCertificate(cacert, cert, String())); // Signed by our CA?
+	BOOST_CHECK(VerifyCertificate(caDir + "/ca.crt", cert, String()));
+	BOOST_CHECK(!VerifyCertificate(caDir + "/missing-ca.crt", cert, String()));
 	auto validUntil = MakeASN1TimeFrom(LEAF_VALID_FOR);
 	BOOST_CHECK_MESSAGE(0 >= Asn1TimeCompare(X509_get_notAfter(cert.get()), validUntil.get()),
 		"Leaf certificate should expire within " << std::quoted(FormatAsn1Time(validUntil.get()))

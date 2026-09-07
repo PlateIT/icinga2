@@ -38,7 +38,7 @@ RUN chroot ${INSTALL_ROOT} update-ca-trust
 RUN --mount=type=bind,source=.,target=/icinga2,readonly \
 	cmake -G Ninja -S /icinga2 -B /tmp/icinga2/release \
 		-DCMAKE_BUILD_TYPE=RelWithDebInfo \
-		-DBUILD_TESTING=OFF \
+		-DBUILD_TESTING=ON \
 		-DCMAKE_INSTALL_PREFIX=/usr \
 		-DCMAKE_INSTALL_SYSCONFDIR=/etc \
 		-DCMAKE_INSTALL_LOCALSTATEDIR=/var \
@@ -65,6 +65,7 @@ RUN --mount=type=bind,source=.,target=/icinga2,readonly \
 		-DUSE_SYSTEMD=OFF \
 		-DICINGA2_GIT_VERSION_INFO=OFF && \
 	cmake --build /tmp/icinga2/release --parallel "${BUILD_JOBS}" && \
+	ctest --test-dir /tmp/icinga2/release --output-on-failure --no-tests=error -R base_tlsutility && \
 	DESTDIR=${INSTALL_ROOT} cmake --install /tmp/icinga2/release
 
 COPY bit/icinga_env.sh bit/check_dirx_api.sh bit/container-runtime.conf /tmp/
@@ -77,7 +78,7 @@ RUN mkdir -p \
   chown -R 0:0 ${INSTALL_ROOT}/icinga ${INSTALL_ROOT}/run/icinga2 && \
   chmod -R g=u ${INSTALL_ROOT}/icinga ${INSTALL_ROOT}/run/icinga2 && \
 	rm -rf ${INSTALL_ROOT}/usr/share/{doc,man}
-  
+
 #############################
 # Final image
 #############################

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 Icinga GmbH <https://icinga.com>
+// SPDX-FileCopyrightText: 2026 Bundesamt für Informatik und Telekommunikation BIT
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "cli/environmentbootstraputility.hpp"
@@ -18,7 +18,6 @@
 #include "base/json.hpp"
 #include "base/logger.hpp"
 #include "base/networkstream.hpp"
-#include "base/tcpsocket.hpp"
 #include "base/tlsutility.hpp"
 #include "base/tlsstream.hpp"
 #include "base/utility.hpp"
@@ -34,8 +33,13 @@
 #include <boost/beast/http/verb.hpp>
 #include <boost/beast/http/write.hpp>
 #include <boost/program_options.hpp>
+#include <boost/asio/connect.hpp>
+#include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/spawn.hpp>
 #include <openssl/pem.h>
+#include <chrono>
 #include <cctype>
+#include <exception>
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
@@ -139,6 +143,12 @@ struct BootstrapEndpoint
 	String port;
 };
 
+struct BootstrapTicket
+{
+	String ticket;
+	std::shared_ptr<X509> parentCertificate;
+};
+
 void ValidatePort(const String& value, const String& variable)
 {
 	try {
@@ -150,54 +160,69 @@ void ValidatePort(const String& value, const String& variable)
 	}
 }
 
-String RequestTicket(const BootstrapEndpoint& parent, const std::shared_ptr<X509>& expectedCertificate,
+BootstrapTicket RequestTicket(const BootstrapEndpoint& parent, const String& bootstrapCaFile,
 	const String& commonName)
 {
 	namespace beast = boost::beast;
 	namespace http = beast::http;
 
-	String username = Env("ICINGA2_PARENT_API_USER");
-	String password = Env("ICINGA2_PARENT_API_PASSWORD");
-	if (username.IsEmpty() != password.IsEmpty())
-		BOOST_THROW_EXCEPTION(std::invalid_argument(
-			"ICINGA2_PARENT_API_USER and ICINGA2_PARENT_API_PASSWORD must be configured together"));
-	if (username.IsEmpty()) {
-		username = RequireEnv("ICINGA2_API_USER");
-		password = RequireEnv("ICINGA2_API_PASSWORD");
-	}
-	auto sslContext = MakeAsioSslContext();
+	String username = RequireEnv("ICINGA2_PARENT_API_USER");
+	String password = RequireEnv("ICINGA2_PARENT_API_PASSWORD");
+	auto sslContext = MakeAsioSslContext(String(), String(), bootstrapCaFile);
+	boost::asio::io_context bootstrapIo;
 	auto stream = Shared<AsioTlsStream>::Make(
-		IoEngine::Get().GetIoContext(), *sslContext, parent.name);
+		bootstrapIo, *sslContext, parent.name);
+	std::exception_ptr operationError;
+	std::shared_ptr<X509> peerCertificate;
+	http::response<http::string_body> response;
+	auto strand = std::make_shared<boost::asio::io_context::strand>(bootstrapIo);
 
-	icinga::Connect(stream->lowest_layer(), parent.address, parent.port);
-	auto& tlsStream = stream->next_layer();
-	tlsStream.handshake(tlsStream.client);
-	auto peerCertificate = tlsStream.GetPeerCertificate();
-	if (!peerCertificate
-		|| SHA256(CertificateToString(peerCertificate))
-			!= SHA256(CertificateToString(expectedCertificate))
-		|| GetCertificateCN(peerCertificate) != parent.name) {
+	IoEngine::SpawnCoroutine(*strand, [&](boost::asio::yield_context yc) {
+		try {
+			boost::asio::ip::tcp::resolver resolver(bootstrapIo);
+			Timeout timeout(*strand, std::chrono::seconds(10), [&] {
+				resolver.cancel();
+				stream->ForceDisconnect();
+			});
+			auto addresses = resolver.async_resolve(parent.address.GetData(), parent.port.GetData(), yc);
+			boost::asio::async_connect(stream->lowest_layer(), addresses, yc);
+			stream->lowest_layer().set_option(boost::asio::ip::tcp::socket::keep_alive(true));
+			auto& tlsStream = stream->next_layer();
+			tlsStream.async_handshake(tlsStream.client, yc);
+			peerCertificate = tlsStream.GetPeerCertificate();
+			if (!tlsStream.IsVerifyOK() || !peerCertificate || GetCertificateCN(peerCertificate) != parent.name)
+				BOOST_THROW_EXCEPTION(std::runtime_error(
+					"TLS trust or Icinga identity for parent '" + parent.name + "' does not match"));
+
+			Dictionary::Ptr payload = new Dictionary({{"cn", commonName}});
+			http::request<http::string_body> request(
+				http::verb::post, "/v1/actions/generate-ticket", 10);
+			request.set(http::field::host, parent.name + ":" + parent.port);
+			request.set(http::field::user_agent, "Icinga/EnvironmentBootstrap/" + Application::GetAppVersion());
+			request.set(http::field::accept, "application/json");
+			request.set(http::field::content_type, "application/json");
+			request.set(http::field::authorization, "Basic " + Base64::Encode(username + ":" + password));
+			request.body() = JsonEncode(payload);
+			request.prepare_payload();
+
+			http::async_write(*stream, request, yc);
+			stream->async_flush(yc);
+			http::parser<false, http::string_body> parser;
+			beast::flat_buffer buffer;
+			http::async_read(*stream, buffer, parser, yc);
+			response = parser.release();
+		} catch (...) {
+			operationError = std::current_exception();
+		}
+	});
+
+	bootstrapIo.run();
+	if (operationError)
+		std::rethrow_exception(operationError);
+	if (!peerCertificate) {
 		BOOST_THROW_EXCEPTION(std::runtime_error(
-			"TLS certificate pin or Icinga identity for parent '" + parent.name + "' does not match"));
+			"Parent '" + parent.name + "' did not present a certificate"));
 	}
-
-	Dictionary::Ptr payload = new Dictionary({{"cn", commonName}});
-	http::request<http::string_body> request(
-		http::verb::post, "/v1/actions/generate-ticket", 10);
-	request.set(http::field::host, parent.name + ":" + parent.port);
-	request.set(http::field::user_agent, "Icinga/EnvironmentBootstrap/" + Application::GetAppVersion());
-	request.set(http::field::accept, "application/json");
-	request.set(http::field::content_type, "application/json");
-	request.set(http::field::authorization, "Basic " + Base64::Encode(username + ":" + password));
-	request.body() = JsonEncode(payload);
-	request.prepare_payload();
-
-	http::write(*stream, request);
-	stream->flush();
-	http::parser<false, http::string_body> parser;
-	beast::flat_buffer buffer;
-	http::read(*stream, buffer, parser);
-	auto& response = parser.get();
 	if (response.result() != http::status::ok) {
 		BOOST_THROW_EXCEPTION(std::runtime_error(
 			"Ticket request to parent '" + parent.name + "' failed with HTTP "
@@ -216,7 +241,7 @@ String RequestTicket(const BootstrapEndpoint& parent, const std::shared_ptr<X509
 		BOOST_THROW_EXCEPTION(std::runtime_error(
 			"Parent did not return a usable PKI ticket: " + status));
 	}
-	return ticket;
+	return {ticket, peerCertificate};
 }
 
 void ReconcileIntermediateCa()
@@ -407,6 +432,10 @@ void ReconcileRuntimeConfiguration(const String& host, const String& zone, const
 int SetupSatellite(const String& host, const String& zone, const String& listen,
 	const String& parentZone, const std::vector<BootstrapEndpoint>& candidates)
 {
+	String bootstrapCaFile = RequireEnv("ICINGA2_BOOTSTRAP_CA_FILE");
+	if (!Utility::PathExists(bootstrapCaFile))
+		BOOST_THROW_EXCEPTION(std::invalid_argument(
+			"ICINGA2_BOOTSTRAP_CA_FILE does not exist"));
 	String trustedFile = Configuration::DataDir + "/certs/bootstrap-parent.crt";
 	Utility::MkDirP(Configuration::DataDir + "/certs", 0700);
 	BootstrapEndpoint parent;
@@ -414,18 +443,10 @@ int SetupSatellite(const String& host, const String& zone, const String& listen,
 	bool bootstrapped = false;
 	for (const BootstrapEndpoint& candidate : candidates) {
 		try {
-			auto parentCertificate = PkiUtility::FetchCert(candidate.address, candidate.port);
-			if (!parentCertificate)
+			BootstrapTicket response = RequestTicket(candidate, bootstrapCaFile, host);
+			if (PkiUtility::WriteCert(response.parentCertificate, trustedFile) != 0)
 				continue;
-			String configuredIntermediate = Env("ICINGA2_CA_CERT_FILE");
-			if (!configuredIntermediate.IsEmpty()
-				&& !VerifyCertificate(configuredIntermediate, parentCertificate, String())) {
-				BOOST_THROW_EXCEPTION(std::runtime_error(
-					"Parent certificate is not signed by the configured Icinga intermediate"));
-			}
-			if (PkiUtility::WriteCert(parentCertificate, trustedFile) != 0)
-				continue;
-			ticket = RequestTicket(candidate, parentCertificate, host);
+			ticket = response.ticket;
 			parent = candidate;
 			bootstrapped = true;
 			break;
@@ -474,6 +495,10 @@ bool EnvironmentBootstrapUtility::Run()
 		ValidatePort(listenPort, "ICINGA2_PORT");
 		RequireEnv("ICINGA2_API_USER");
 		RequireEnv("ICINGA2_API_PASSWORD");
+		if (!Env("ICINGA2_TICKET_SALT").IsEmpty()) {
+			RequireEnv("ICINGA2_BOOTSTRAP_API_USER");
+			RequireEnv("ICINGA2_BOOTSTRAP_API_PASSWORD");
+		}
 		bool rootZone = EnvBool("ICINGA2_ROOT_ZONE");
 		bool signer = rootZone && IsPrimaryOrdinal();
 		String caMode = Env("ICINGA2_CA_MODE", "internal").ToLower();
