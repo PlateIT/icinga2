@@ -187,7 +187,6 @@ std::shared_ptr<X509> ApiListener::RenewCert(const std::shared_ptr<X509>& cert, 
 {
 	std::shared_ptr<EVP_PKEY> pubkey (X509_get_pubkey(cert.get()), EVP_PKEY_free);
 	auto subject (X509_get_subject_name(cert.get()));
-	auto cacert (GetX509Certificate(GetDefaultCaPath()));
 	auto newcert (CreateCertIcingaCA(pubkey.get(), subject, 0, ca ? ROOT_VALID_FOR : LEAF_VALID_FOR, ca));
 
 	/* verify that the new cert matches the CA we're using for the ApiListener;
@@ -195,14 +194,14 @@ std::shared_ptr<X509> ApiListener::RenewCert(const std::shared_ptr<X509>& cert, 
 	 * we're using for cluster connections (there's no point in sending a client
 	 * a certificate it wouldn't be able to use to connect to us anyway) */
 	try {
-		if (!VerifyCertificate(cacert, newcert, GetCrlPath())) {
+		if (!VerifyCertificate(GetDefaultCaPath(), newcert, GetCrlPath())) {
 			Log(LogWarning, "ApiListener")
 				<< "The CA in '" << GetDefaultCaPath() << "' does not match the CA which Icinga uses "
 				<< "for its own cluster connections. This is most likely a configuration problem.";
 
 			return nullptr;
 		}
-	} catch (const std::exception&) { } /* Swallow the exception on purpose, cacert will never be a non-CA certificate. */
+	} catch (const std::exception&) { } /* The configured CA bundle is validated when the SSL context is loaded. */
 
 	return newcert;
 }
@@ -262,11 +261,17 @@ void ApiListener::Start(bool runtimeCreated)
 
 	if (Utility::PathExists(GetIcingaCADir() + "/ca.key")) {
 		RenewOwnCert();
-		RenewCA();
+		if (!Utility::PathExists(GetIcingaCADir() + "/corporate-intermediate")) {
+			RenewCA();
+		} else {
+			Log(LogInformation, "ApiListener")
+				<< "CA auto-renewal is disabled for the corporate Icinga intermediate.";
+		}
 
 		m_RenewOwnCertTimer->OnTimerExpired.connect([this](const Timer * const&) {
 			RenewOwnCert();
-			RenewCA();
+			if (!Utility::PathExists(GetIcingaCADir() + "/corporate-intermediate"))
+				RenewCA();
 		});
 	} else {
 		m_RenewOwnCertTimer->OnTimerExpired.connect([](const Timer * const&) {
