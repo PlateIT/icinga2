@@ -15,6 +15,7 @@ concurrency:
 
 jobs:
   container-image:
+    if: github.repository_owner == 'Icinga'
     # Required by the base Container Image Action [^1].
     # [^1]: https://github.com/Icinga/github-actions/blob/main/.github/workflows/container-image.yml#L54-L58
     permissions:
