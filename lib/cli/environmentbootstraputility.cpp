@@ -377,7 +377,10 @@ void WriteHaZones(bool rootZone, const String& host, const String& zone)
 	writeEndpoint(endpoint0, address0);
 	writeEndpoint(endpoint1, address1);
 	config << "object Zone \"" << zone << "\" {\n"
-		<< "  endpoints = [ \"" << endpoint0 << "\", \"" << endpoint1 << "\" ]\n}\n"
+		<< "  endpoints = [ \"" << endpoint0 << "\", \"" << endpoint1 << "\" ]\n";
+	if (!rootZone)
+		config << "  parent = \"" << RequireEnv("ICINGA2_PARENT_ZONE") << "\"\n";
+	config << "}\n"
 		<< "object Zone \"global-templates\" { global = true }\n"
 		<< "object Zone \"director-global\" { global = true }\n";
 
