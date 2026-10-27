@@ -19,7 +19,9 @@ set -exo pipefail
 : "${ICINGA2_BUILD_DIR:=${ICINGA2_SOURCE_DIR}/build}"
 : "${CCACHE_DIR:=${ICINGA2_SOURCE_DIR}/ccache}"
 
-export PATH="/usr/lib/ccache/bin:/usr/lib/ccache:/usr/lib64/ccache:$PATH"
+# Limit ccache so all targets together don't ever get over the 10 GiB limit
+# that would cause the cache of the first action to be evicted.
+export CCACHE_MAXSIZE=400M
 export CTEST_OUTPUT_ON_FAILURE=1
 export CCACHE_DIR
 
@@ -54,8 +56,9 @@ case "$DISTRO" in
     ;;
 
   amazonlinux:20*)
-    dnf install -y amazon-rpm-config bison cmake flex gcc-c++ ninja-build \
+    dnf install --nobest -y amazon-rpm-config spal-release bison cmake flex gcc-c++ ninja-build \
       {boost,libedit,mariadb-connector-c,ncurses,openssl,postgresql,systemd,protobuf-lite}-devel
+    dnf install --nobest -y ccache
     ;;
 
   debian:*|ubuntu:*)
@@ -66,18 +69,24 @@ case "$DISTRO" in
     ;;
 
   fedora:*)
-    dnf install -y bison ccache cmake flex gcc-c++ ninja-build redhat-rpm-config \
+    dnf install --nobest -y bison ccache cmake flex gcc-c++ ninja-build redhat-rpm-config \
       {boost,libedit,mariadb,ncurses,openssl,postgresql,systemd,protobuf-lite}-devel
     ;;
 
   *suse*)
+    # SUSE's download servers occasionally reset connections mid-download (curl error 35),
+    # which makes zypper abort the whole installation. Let libzypp retry failed downloads.
+    # Only its newer network backend honors download.max_silent_tries, so enable that as well.
+    export ZYPP_CONF=/tmp/zypp.conf ZYPP_MEDIANETWORK=1
+    printf '[main]\ndownload.max_silent_tries = 5\n' > "$ZYPP_CONF"
+
     zypper in -y --allow-downgrade bison ccache cmake flex gcc-c++ ninja rpm-config-SUSE \
       {lib{edit,mariadb,openssl},ncurses,postgresql,systemd,protobuf}-devel \
       libboost_{context,coroutine,filesystem,iostreams,program_options,regex,system,test,thread}-devel
     ;;
 
   *rockylinux:*)
-    dnf install -y 'dnf-command(config-manager)' epel-release
+    dnf install --nobest -y 'dnf-command(config-manager)' epel-release
 
     case "$DISTRO" in
       *:8)
@@ -85,14 +94,14 @@ case "$DISTRO" in
         # Our Protobuf package on RHEL 8 is built with GCC 13, and since the ABI is not compatible with GCC 8,
         # we need to enable the SCL repository and install the GCC 13 packages to be able to link against it.
         SCL_ENABLE_GCC=(scl enable gcc-toolset-13 --)
-        dnf install -y gcc-toolset-13-gcc-c++ gcc-toolset-13-annobin-plugin-gcc
+        dnf install --nobest -y gcc-toolset-13-gcc-c++ gcc-toolset-13-annobin-plugin-gcc
         ;;
       *)
         dnf config-manager --enable crb
         ;;
     esac
 
-    dnf install -y bison ccache cmake gcc-c++ flex ninja-build redhat-rpm-config \
+    dnf install --nobest -y bison ccache cmake gcc-c++ flex ninja-build redhat-rpm-config \
       {boost,bzip2,libedit,mariadb,ncurses,openssl,postgresql,systemd,xz,libzstd}-devel
 
     # Rocky Linux 8 and 9 don't have a recent enough Protobuf compiler for OTel, so we need to add
@@ -108,12 +117,12 @@ enabled=1
 gpgcheck=1
 gpgkey=https://packages.icinga.com/icinga.key
 EOF
-        dnf install -y icinga-protobuf
+        dnf install --nobest -y icinga-protobuf
         # Tell CMake where to find our own Protobuf CMake config files.
         CMAKE_OPTS+=(-DCMAKE_PREFIX_PATH="$(rpm -E '%{_libdir}')/icinga-protobuf/cmake")
         ;;
       *)
-        dnf install -y protobuf-lite-devel
+        dnf install --nobest -y protobuf-lite-devel
     esac
     ;;
 esac
@@ -125,6 +134,8 @@ case "$DISTRO" in
       -DICINGA2_WITH_MYSQL=OFF
       -DICINGA2_WITH_PGSQL=OFF
       -DCMAKE_{C,CXX}_FLAGS="${WARN_FLAGS}"
+      -DICINGA2_UNITY_BUILD=OFF
+      -DCMAKE_CXX_STANDARD=20
     )
     ;;
   debian:*|ubuntu:*)
@@ -146,13 +157,33 @@ case "$DISTRO" in
     ;;
 esac
 
+# ccache isn't packaged for every distro (currently only amazonlinux).
+# We add it at the CMake layer because that's more compatible with distros
+# that use their own compiler wrappers.
+if command -v ccache >/dev/null; then
+  CMAKE_OPTS+=(
+    -DCMAKE_C_COMPILER_LAUNCHER=ccache
+    -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+  )
+  # Zero the stats so the summary below reflects only this run.
+  ccache -z
+fi
+
 mkdir -p "$ICINGA2_BUILD_DIR"
 cd "$ICINGA2_BUILD_DIR"
+
+# Disable the addtion of debug symbols to the objects to reduce ccache size.
+# Several targets will also add '-g' to the regular compiler flags, and adding
+# -g0 to the build-type specific variable is the only way to reliably override
+# it.
+CMAKE_OPTS+=(
+  -DCMAKE_C_FLAGS_RELWITHDEBINFO="-O2 -DNDEBUG -g0"
+  -DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-O2 -DNDEBUG -g0"
+)
 
 "${SCL_ENABLE_GCC[@]}" cmake \
   -GNinja \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-  -DICINGA2_UNITY_BUILD=ON \
   -DUSE_SYSTEMD=ON \
   -DICINGA2_USER=$(id -un) \
   -DICINGA2_GROUP=$(id -gn) \
@@ -173,6 +204,17 @@ if [[ -v CI_RUNNER_ID ]]; then
 fi
 
 ninja "${NINJA_OPTS[@]}"
+
+# Print ccache stats
+if command -v ccache >/dev/null; then
+  ccache -s
+  # Not all distros have a ccache version that prints precise cache size values.
+  # Some have ccache --print-stats but others don't. This just prints the size
+  # of the cache directory in MiB.
+  ccache_kib=$(du -sk "$CCACHE_DIR" | cut -f1)
+  printf 'exact ccache size (du): %s KiB (%d.%02d MiB)\n' \
+    "$ccache_kib" "$((ccache_kib / 1024))" "$((ccache_kib * 100 / 1024 % 100))"
+fi
 
 ninja test
 ninja install

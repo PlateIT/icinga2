@@ -1,11 +1,10 @@
 # SPDX-FileCopyrightText: 2012 Icinga GmbH <https://icinga.com>
 # SPDX-License-Identifier: GPL-2.0-or-later
 
-# CMake 3.17 is required, CMake policy compatibility was verified up to 3.17.
-cmake_minimum_required(VERSION 3.17...3.17)
+cmake_minimum_required(VERSION 3.17)
 set(BOOST_MIN_VERSION "1.66.0")
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 17 CACHE STRING "C++ standard to use")
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -39,10 +38,12 @@ option(ICINGA2_WITH_PERFDATA "Build the perfdata module" ${ICINGA2_MASTER})
 option(ICINGA2_WITH_ICINGADB "Build the IcingaDB module" ${ICINGA2_MASTER})
 option(ICINGA2_WITH_OPENTELEMETRY "Build the OpenTelemetry integration module" ${ICINGA2_MASTER})
 
-option (USE_SYSTEMD
- "Configure icinga as native systemd service instead of a SysV initscript" OFF)
-
-set(HAVE_SYSTEMD ${USE_SYSTEMD})
+if(NOT DEFINED USE_SYSTEMD)
+  find_package(Systemd)
+  set(USE_SYSTEMD ${Systemd_FOUND})
+endif()
+set(USE_SYSTEMD ${USE_SYSTEMD} CACHE BOOL
+  "Configure icinga as native systemd service instead of a SysV initscript")
 
 include(GNUInstallDirs)
 include(InstallConfig)
@@ -182,20 +183,22 @@ add_compile_definitions(OPENSSL_SUPPRESS_DEPRECATED)
 # Boost.Coroutine2 (the successor of Boost.Coroutine)
 # (1) doesn't even exist in old Boost versions and
 # (2) isn't supported by ASIO, yet.
-add_definitions(-DBOOST_COROUTINES_NO_DEPRECATION_WARNING)
+add_compile_definitions(BOOST_COROUTINES_NO_DEPRECATION_WARNING)
 
-add_definitions(-DBOOST_FILESYSTEM_NO_DEPRECATED)
+add_compile_definitions(BOOST_FILESYSTEM_NO_DEPRECATED)
 
 # Required for Boost v1.74+
-add_definitions(-DBOOST_ASIO_USE_TS_EXECUTOR_AS_DEFAULT)
+add_compile_definitions(BOOST_ASIO_USE_TS_EXECUTOR_AS_DEFAULT)
 
 link_directories(${Boost_LIBRARY_DIRS})
 include_directories(SYSTEM ${Boost_INCLUDE_DIRS})
 
+find_package(Threads REQUIRED)
+
 find_package(OpenSSL REQUIRED)
 include_directories(SYSTEM ${OPENSSL_INCLUDE_DIR})
 
-set(base_DEPS ${CMAKE_DL_LIBS} ${Boost_LIBRARIES} ${OPENSSL_LIBRARIES})
+set(base_DEPS ${CMAKE_DL_LIBS} ${Boost_LIBRARIES} ${OPENSSL_LIBRARIES} Threads::Threads)
 set(base_OBJS $<TARGET_OBJECTS:mmatch> $<TARGET_OBJECTS:socketpair> $<TARGET_OBJECTS:base>)
 
 # JSON
@@ -205,9 +208,6 @@ include_directories(SYSTEM ${JSON_INCLUDE})
 # UTF8CPP
 find_package(UTF8CPP)
 include_directories(SYSTEM ${UTF8CPP_INCLUDE})
-
-find_package(Editline)
-set(HAVE_EDITLINE "${EDITLINE_FOUND}")
 
 find_package(Termcap)
 set(HAVE_TERMCAP "${TERMCAP_FOUND}")
@@ -234,13 +234,9 @@ include_directories(
   ${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_CURRENT_BINARY_DIR}/lib
 )
 
-if(HAVE_SYSTEMD)
-  list(APPEND base_DEPS systemd)
-endif()
-
-if(EDITLINE_FOUND)
-  list(APPEND base_DEPS ${EDITLINE_LIBRARIES})
-  include_directories(SYSTEM ${EDITLINE_INCLUDE_DIR})
+if(USE_SYSTEMD)
+  find_package(Systemd REQUIRED)
+  list(APPEND base_DEPS Systemd::Systemd)
 endif()
 
 if(TERMCAP_FOUND)
@@ -259,18 +255,6 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 
   set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Qunused-arguments -fcolor-diagnostics -fno-limit-debug-info")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Qunused-arguments -fcolor-diagnostics -fno-limit-debug-info")
-
-  # Clang on Fedora requires -pthread, Apple Clang does not
-  # AppleClang is available since CMake 3.0.0
-  if (NOT CMAKE_CXX_COMPILER_ID MATCHES "AppleClang")
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -pthread")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pthread")
-  endif()
-endif()
-
-if(CMAKE_C_COMPILER_ID STREQUAL "SunPro")
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mt")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mt -library=stlport4")
 endif()
 
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
@@ -279,30 +263,10 @@ if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
   if("${CMAKE_CXX_COMPILER_VERSION}" VERSION_GREATER_EQUAL "11.0.0")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wrange-loop-construct")
   endif()
-
-  if(CMAKE_SYSTEM_NAME MATCHES AIX)
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g -lpthread")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -lpthread")
-  elseif(CMAKE_SYSTEM_NAME MATCHES "kOpenBSD.*|OpenBSD.*")
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g -pthread")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -pthread")
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -lpthread")
-    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -lpthread")
-    set(CMAKE_STATIC_LINKER_FLAGS "${CMAKE_STATIC_LINKER_FLAGS} -lpthread")
-  else()
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g -pthread")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -pthread")
-  endif()
 endif()
 
 include(CheckCXXCompilerFlag)
-
-function(check_cxx_linker_flag flag var)
-  set(CMAKE_REQUIRED_FLAGS ${flag})
-  set(result 0)
-  check_cxx_compiler_flag(${flag} result)
-  set(${var} ${result} PARENT_SCOPE)
-endfunction()
+include(CheckCXXLinkerFlag)
 
 check_cxx_linker_flag("-Wl,--gc-sections" LD_GC_SECTIONS)
 
@@ -365,7 +329,11 @@ if(ICINGA2_LTO_BUILD)
 endif()
 
 if(MSVC)
-  add_definitions(-D_CRT_SECURE_NO_DEPRECATE -D_CRT_NONSTDC_NO_DEPRECATE -D_SCL_SECURE_NO_WARNINGS)
+  add_compile_definitions(
+    _CRT_SECURE_NO_DEPRECATE
+    _CRT_NONSTDC_NO_DEPRECATE
+    _SCL_SECURE_NO_WARNINGS
+  )
 endif()
 
 set(LIBRARY_OUTPUT_PATH ${CMAKE_BINARY_DIR}/Bin/${CMAKE_BUILD_TYPE} CACHE PATH "Library output path")
@@ -386,7 +354,17 @@ set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -DI2_DEBUG")
 set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -DI2_DEBUG")
 
 check_function_exists(vfork HAVE_VFORK)
+
 check_function_exists(backtrace_symbols HAVE_BACKTRACE_SYMBOLS)
+if(NOT HAVE_BACKTRACE_SYMBOLS)
+  find_package(Execinfo)
+  if(Execinfo_FOUND)
+    set(HAVE_BACKTRACE_SYMBOLS TRUE)
+    # TODO: Temporary until we're getting rid of these lists
+    list(APPEND base_DEPS Execinfo::Execinfo)
+  endif()
+endif()
+
 check_function_exists(pipe2 HAVE_PIPE2)
 check_function_exists(nice HAVE_NICE)
 check_function_exists(malloc_info HAVE_MALLOC_INFO)
@@ -394,17 +372,11 @@ check_function_exists(pthread_create HAVE_PTHREAD_CREATE)
 check_function_exists(pthread_set_name_np HAVE_PTHREAD_SET_NAME_NP)
 check_function_exists(pthread_setname_np HAVE_PTHREAD_SETNAME_NP)
 check_library_exists(dl dladdr "dlfcn.h" HAVE_DLADDR)
-check_library_exists(execinfo backtrace_symbols "" HAVE_LIBEXECINFO)
 check_include_file_cxx(cxxabi.h HAVE_CXXABI_H)
-
-if(HAVE_LIBEXECINFO)
-  set(HAVE_BACKTRACE_SYMBOLS TRUE)
-  list(APPEND base_DEPS execinfo)
-endif()
 
 if(NOT WIN32)
   # boost::stacktrace uses _Unwind_Backtrace which is only exposed if _GNU_SOURCE is defined on most systems
-  add_definitions(-D_GNU_SOURCE)
+  add_compile_definitions(_GNU_SOURCE)
 endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
@@ -416,11 +388,6 @@ if(ICINGA2_STACKTRACE_USE_BACKTRACE_SYMBOLS AND NOT HAVE_BACKTRACE_SYMBOLS)
 endif()
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-  exec_program(${CMAKE_CXX_COMPILER}
-    ARGS -dumpversion
-    OUTPUT_VARIABLE _ICINGA2_COMPILER_VERSION
-  )
-
   if("${CMAKE_CXX_COMPILER_VERSION}" VERSION_LESS "7.0.0")
     message(FATAL_ERROR "Your version of GCC (${CMAKE_CXX_COMPILER_VERSION}) is too old for building Icinga 2 (GCC >= 7.0.0 is required).")
   endif()
@@ -432,58 +399,20 @@ if(MSVC)
   endif()
 endif()
 
-if(NOT MSVC)
-  check_cxx_source_compiles("class Base { public: virtual void test(void) { } }; class Derived : public Base { virtual void test(void) override { } }; int main(){}" CXX_FEATURE_OVERRIDE)
-
-  if(NOT CXX_FEATURE_OVERRIDE)
-    add_definitions("-Doverride=")
+include(CheckWorkingCxxAtomics)
+check_working_cxx_atomics(HAVE_CXX_ATOMICS)
+if(NOT HAVE_CXX_ATOMICS)
+  link_libraries(atomic)
+  check_working_cxx_atomics(HAVE_CXX_ATOMICS)
+  if(NOT HAVE_CXX_ATOMICS)
+    message(FATAL_ERROR "Could not determine C++ atomics support")
   endif()
 endif()
 
-# Architecture specifics
-# - Log the target architecture
-# - ARM needs to link against atomic
-if(NOT MSVC)
-  # inspired by https://github.com/civetweb/civetweb/blob/master/cmake/DetermineTargetArchitecture.cmake
-  execute_process(
-    COMMAND ${CMAKE_C_COMPILER} -dumpmachine
-    RESULT_VARIABLE RESULT
-    OUTPUT_VARIABLE ARCH
-    ERROR_QUIET
-  )
-
-  if (RESULT)
-    message(STATUS "Failed to detect target architecture with compiler ${CMAKE_C_COMPILER}: ${RESULT}")
-  endif()
-
-  string(REGEX MATCH "([^-]+).*" ARCH_MATCH "${ARCH}")
-  if (NOT CMAKE_MATCH_1 OR NOT ARCH_MATCH)
-    message(STATUS "Failed to match the target architecture: ${ARCH}")
-  endif()
-
-  set(ARCH ${CMAKE_MATCH_1})
-
-  message(STATUS "Target architecture - ${ARCH}")
-
-  # ARM settings
-  if("${ARCH}" STREQUAL "arm")
-    check_cxx_source_compiles( "include <atomic>; int main(){ std::atomic<uint_fast64_t> x; x.fetch_add(1); x.sub_add(1);  }" CXX_ATOMIC)
-    link_libraries(atomic)
-  endif()
-
-else()
-  if("${MSVC_C_ARCHITECTURE_ID}" STREQUAL "X86")
-    set(ARCH "i686")
-  elseif("${MSVC_C_ARCHITECTURE_ID}" STREQUAL "x64")
-    set(ARCH "x86_64")
-  elseif("${MSVC_C_ARCHITECTURE_ID}" STREQUAL "ARM")
-    set(ARCH "arm")
-  else()
-    message(FATAL_ERROR "Failed to determine the MSVC target architecture: ${MSVC_C_ARCHITECTURE_ID}")
-  endif()
-
-  message(STATUS "Target architecture - ${ARCH}")
+if(CMAKE_CROSSCOMPILING)
+  message(STATUS "Host architecture - ${CMAKE_HOST_SYSTEM_PROCESSOR}")
 endif()
+message(STATUS "Target architecture - ${CMAKE_SYSTEM_PROCESSOR}")
 
 configure_file(config.h.cmake ${CMAKE_CURRENT_BINARY_DIR}/config.h ESCAPE_QUOTES)
 

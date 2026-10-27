@@ -120,12 +120,23 @@ Continue after breakpoint.
 
 #### GDB Core Dump <a id="development-debug-gdb-coredump"></a>
 
-Either attach to the running process using `gdb -p PID` or start
-a new gdb run.
+Attach to the running process using `gdb -p PID` and run the following command to produce a core file.
+Hint: The current PID of Icinga 2 main worker process can be obtained with `ps -o pid=,comm= --ppid "$(systemctl show -p MainPID --value icinga2)" | awk '$2=="icinga2"{print $1}'`
 
 ```
-(gdb) r
 (gdb) generate-core-file
+```
+
+Alternatively a core dump can be created with the following command directly from the CLI without entering the GDB debugger:
+
+```
+gcore <PID>
+```
+
+It might also be a good idea to capture a dump of all of the main icinga processes and not just the main worker.
+
+```
+for pid in $(pidof icinga2); do gcore $pid; done
 ```
 
 #### GDB Backtrace <a id="development-debug-gdb-backtrace"></a>
@@ -917,6 +928,13 @@ Depending on the file type, this must be a comment.
 ```
 
 #### Code Formatting <a id="development-develop-code-formatting"></a>
+
+!!! note
+
+    We've added a `.clang-format` file to our project, which doesn't fully match the following description in every detail.
+    If in doubt, use the command `git clang-format --extensions c,h,cpp,hpp --force -- ':(exclude)third-party/*'`
+    to reformat your changed lines before you commit. Since this is not entirely final yet we'll revise this section
+    when we're done fine-tuning.
 
 **Tabs instead of spaces.** Inside Visual Studio, choose to keep tabs instead of
 spaces. Tabs should use 4 spaces indent by default, depending on your likings.

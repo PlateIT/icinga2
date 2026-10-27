@@ -43,7 +43,15 @@ endif()
 
 add_library(cli OBJECT ${cli_SOURCES})
 
-add_dependencies(cli base config icinga remote)
+add_dependencies(cli base_generated icinga_generated remote_generated)
+
+find_package(Editline)
+if(Editline_FOUND)
+  target_link_libraries(cli PUBLIC
+    Editline::Editline
+  )
+  target_compile_definitions(cli PUBLIC HAVE_EDITLINE)
+endif()
 
 set_target_properties (
   cli PROPERTIES
