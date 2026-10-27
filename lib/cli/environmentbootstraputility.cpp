@@ -175,7 +175,7 @@ BootstrapTicket RequestTicket(const BootstrapEndpoint& parent, const String& boo
 	std::exception_ptr operationError;
 	std::shared_ptr<X509> peerCertificate;
 	http::response<http::string_body> response;
-	auto strand = std::make_shared<boost::asio::io_context::strand>(bootstrapIo);
+	auto strand = std::make_shared<IoStrand>(bootstrapIo.get_executor());
 
 	IoEngine::SpawnCoroutine(*strand, [&](boost::asio::yield_context yc) {
 		try {
