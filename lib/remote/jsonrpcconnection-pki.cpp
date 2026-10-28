@@ -53,7 +53,12 @@ Value RequestCertificateHandler(const MessageOrigin::Ptr& origin, const Dictiona
 	}
 
 	ApiListener::Ptr listener = ApiListener::GetInstance();
-	std::shared_ptr<X509> cacert = GetX509Certificate(GetIcingaCADir() + "/ca.crt");
+	String caCertFile = GetIcingaCADir() + "/ca.crt";
+	// Non-signing HA peers and satellites have the public trust bundle, not
+	// the signer's CA directory. Keep using the signing certificate where it exists.
+	if (!Utility::PathExists(caCertFile))
+		caCertFile = listener->GetDefaultCaPath();
+	std::shared_ptr<X509> cacert = GetX509Certificate(caCertFile);
 	std::ifstream caStream(listener->GetDefaultCaPath().CStr());
 	String caBundle((std::istreambuf_iterator<char>(caStream)), std::istreambuf_iterator<char>());
 
